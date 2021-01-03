@@ -1,12 +1,12 @@
-require 'time'
-require 'rb1drv/sliced_io'
+require "time"
+require "rb1drv/sliced_io"
 
 module Rb1drv
   class OneDriveDir < OneDriveItem
     attr_reader :child_count
     def initialize(od, api_hash)
       super
-      @child_count = api_hash.dig('folder', 'childCount')
+      @child_count = api_hash.dig("folder", "childCount")
       @cache = {}
     end
 
@@ -16,7 +16,7 @@ module Rb1drv
     def children
       return [] if child_count <= 0
       with_cache(:children) do
-        @od.request("#{api_path}/children?$top=1000")['value'].map do |child|
+        @od.request("#{api_path}/children?$top=1000")["value"].map do |child|
           OneDriveItem.smart_new(@od, child)
         end
       end
@@ -39,7 +39,7 @@ module Rb1drv
     #
     # @return [OneDriveDir,OneDriveFile,OneDrive404] the drive item you asked
     def get(path)
-      path = "/#{path}" unless path[0] == '/'
+      path = "/#{path}" unless path[0] == "/"
       with_cache(:get, path) do
         OneDriveItem.smart_new(@od, @od.request("#{api_path}:#{path}"))
       end
@@ -60,7 +60,7 @@ module Rb1drv
       if @parent_path
         File.join(@parent_path, @name)
       else
-        '/'
+        "/"
       end
     end
 
@@ -69,19 +69,18 @@ module Rb1drv
     # @param name [String] directories you'd like to create
     # @return [OneDriveDir] the directory you created
     def mkdir(name)
-      return self if name == '.'
-      name = name[1..-1] if name[0] == '/'
-      newdir, *remainder = name.split('/')
+      return self if name == "."
+      name = name[1..-1] if name[0] == "/"
+      newdir, *remainder = name.split("/")
       subdir = get(newdir)
       unless subdir.dir?
         result = @od.request("#{api_path}/children",
           name: newdir,
           folder: {},
-          '@microsoft.graph.conflictBehavior': 'rename'
-        )
+          '@microsoft.graph.conflictBehavior': "rename")
         subdir = OneDriveDir.new(@od, result)
       end
-      remainder.any? ? subdir.mkdir(remainder.join('/')) : subdir
+      remainder.any? ? subdir.mkdir(remainder.join("/")) : subdir
     end
 
     # Uploads a local file into current remote directory.
@@ -105,81 +104,87 @@ module Rb1drv
     # @yieldparam event [Symbol] event of this notification
     # @yieldparam status [{Symbol => String,Integer}] details
     def upload(filename, overwrite: false, fragment_size: 41_943_040, chunk_size: 1_048_576, target_name: nil, &block)
-      raise ArgumentError.new('File not found') unless File.exist?(filename)
+      raise ArgumentError.new("File not found") unless File.exist?(filename)
       conn = nil
       file_size = File.size(filename)
       target_name ||= File.basename(filename)
       return upload_simple(filename, overwrite: overwrite, target_name: target_name) if file_size <= 4_096_000
 
       resume_file = "#{filename}.1drv_upload"
-      resume_session = JSON.parse(File.read(resume_file)) rescue nil if File.exist?(resume_file)
+      if File.exist?(resume_file)
+        resume_session = begin
+          JSON.parse(File.read(resume_file))
+        rescue
+          nil
+        end
+      end
       old_file = OneDriveItem.smart_new(@od, @od.request("#{api_path}:/#{target_name}"))
       new_file = nil
 
       result = nil
       loop do
         catch :restart do
-          if resume_session && resume_session['session_url']
-            conn = Excon.new(resume_session['session_url'], idempotent: true)
+          if resume_session && resume_session["session_url"]
+            conn = Excon.new(resume_session["session_url"], idempotent: true)
             loop do
               result = JSON.parse(conn.get.body)
-              break unless result.dig('error', 'code') == 'accessDenied'
+              break unless result.dig("error", "code") == "accessDenied"
               sleep 5
             end
-            resume_position = result.dig('nextExpectedRanges', 0)&.split('-')&.first&.to_i or resume_session = nil
+            (resume_position = result.dig("nextExpectedRanges", 0)&.split("-")&.first&.to_i) || (resume_session = nil)
           end
 
           resume_position ||= 0
 
           if resume_session
-            file_size == resume_session['source_size'] or resume_session = nil
+            (file_size == resume_session["source_size"]) || (resume_session = nil)
           end
 
-          until resume_session && resume_session['session_url'] do
-            result = @od.request("#{api_path}:/#{target_name}:/createUploadSession", item: {'@microsoft.graph.conflictBehavior': overwrite ? 'replace' : 'rename'})
-            if result['uploadUrl']
+          until resume_session && resume_session["session_url"]
+            result = @od.request("#{api_path}:/#{target_name}:/createUploadSession", item: {'@microsoft.graph.conflictBehavior': overwrite ? "replace" : "rename"})
+            if result["uploadUrl"]
               resume_session = {
-                'session_url' => result['uploadUrl'],
-                'source_size' => File.size(filename),
-                'fragment_size' => fragment_size
+                "session_url" => result["uploadUrl"],
+                "source_size" => File.size(filename),
+                "fragment_size" => fragment_size
               }
               File.write(resume_file, JSON.pretty_generate(resume_session))
-              conn = Excon.new(resume_session['session_url'], idempotent: true)
+              conn = Excon.new(resume_session["session_url"], idempotent: true)
               break
             end
             sleep 15
           end
 
           new_file = nil
-          File.open(filename, mode: 'rb', external_encoding: Encoding::BINARY) do |f|
-            resume_position.step(file_size - 1, resume_session['fragment_size']) do |from|
-              to = [from + resume_session['fragment_size'], file_size].min - 1
+          File.open(filename, mode: "rb", external_encoding: Encoding::BINARY) do |f|
+            resume_position.step(file_size - 1, resume_session["fragment_size"]) do |from|
+              to = [from + resume_session["fragment_size"], file_size].min - 1
               len = to - from + 1
               headers = {
                 'Content-Length': len.to_s,
                 'Content-Range': "bytes #{from}-#{to}/#{file_size}"
               }
               @od.logger.info "Uploading #{from}-#{to}/#{file_size}" if @od.logger
-              yield :new_segment, file: filename, from: from, to: to if block_given?
-              sliced_io = SlicedIO.new(f, from, to) do |progress, total|
-                yield :progress, file: filename, from: from, to: to, progress: progress, total: total if block_given?
-              end
+              yield :new_segment, file: filename, from: from, to: to if block
+              sliced_io = SlicedIO.new(f, from, to) { |progress, total|
+                yield :progress, file: filename, from: from, to: to, progress: progress, total: total if block
+              }
               begin
                 result = conn.put headers: headers, chunk_size: chunk_size, body: sliced_io, retry_limit: 2
-                raise IOError if result.body.include? 'accessDenied'
+                raise IOError if result.body.include? "accessDenied"
               rescue Excon::Error::Socket, IOError
                 # Probably server rejected this request
                 throw :restart
               rescue Excon::Error::Timeout
-                conn = Excon.new(resume_session['session_url'], idempotent: true)
-                yield :retry, file: filename, from: from, to: to if block_given?
+                conn = Excon.new(resume_session["session_url"], idempotent: true)
+                yield :retry, file: filename, from: from, to: to if block
                 retry
               ensure
-                yield :finish_segment, file: filename, from: from, to: to if block_given?
+                yield :finish_segment, file: filename, from: from, to: to if block
               end
-              throw :restart if result.body.include?('</html>')
+              throw :restart if result.body.include?("</html>")
               result = JSON.parse(result.body)
-              new_file = OneDriveFile.new(@od, result) if result.dig('file')
+              new_file = OneDriveFile.new(@od, result) if result.dig("file")
             end
           end
           throw :restart unless new_file&.file?
@@ -197,7 +202,7 @@ module Rb1drv
 
       # upload completed
       File.unlink(resume_file)
-      return new_file.set_mtime(File.mtime(filename))
+      new_file.set_mtime(File.mtime(filename))
     end
 
     # Uploads a local file into current remote directory using simple upload mode.
@@ -208,17 +213,17 @@ module Rb1drv
       exist = target_file.file?
       return if exist && !overwrite
       path = nil
-      if exist
-        path = "#{target_file.api_path}/content"
+      path = if exist
+        "#{target_file.api_path}/content"
       else
-        path = "#{api_path}:/#{target_name}:/content"
+        "#{api_path}:/#{target_name}:/content"
       end
 
       query = {
-        path: File.join('v1.0/me/', path),
+        path: File.join("v1.0/me/", path),
         headers: {
           'Authorization': "Bearer #{@od.access_token.token}",
-          'Content-Type': 'application/octet-stream'
+          'Content-Type': "application/octet-stream"
         },
         body: File.read(filename)
       }
@@ -232,9 +237,7 @@ module Rb1drv
       @skip_cache || false
     end
 
-    def skip_cache=(val)
-      @skip_cache = val
-    end
+    attr_writer :skip_cache
 
     # Clears cache for directory
     def clear_cache!
@@ -252,6 +255,5 @@ module Rb1drv
         @cache[keys]
       end
     end
-
   end
 end

@@ -4,7 +4,7 @@ module Rb1drv
     end
 
     def id
-      '_FILE_NOT_FOUND_'
+      "_FILE_NOT_FOUND_"
     end
 
     # No

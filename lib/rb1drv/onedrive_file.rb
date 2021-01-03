@@ -3,7 +3,7 @@ module Rb1drv
     attr_reader :download_url
     def initialize(od, api_hash)
       super
-      @download_url = api_hash.dig('@microsoft.graph.downloadUrl')
+      @download_url = api_hash.dig("@microsoft.graph.downloadUrl")
     end
 
     # No
@@ -27,7 +27,7 @@ module Rb1drv
     # @yield [event, status] for receive progress notification
     # @yieldparam event [Symbol] event of this notification
     # @yieldparam status [{Symbol => String,Integer}] details
-    def save_as(target_name=nil, overwrite: false, resume: true, &block)
+    def save_as(target_name = nil, overwrite: false, resume: true, &block)
       target_name ||= @name
       tmpfile = "#{target_name}.incomplete"
 
@@ -36,25 +36,25 @@ module Rb1drv
       if resume && File.size(tmpfile) > 0
         from = File.size(tmpfile)
         len = @size - from
-        fmode = 'ab'
+        fmode = "ab"
         headers = {
           'Range': "bytes=#{from}-"
         }
       else
         from = 0
         len = @size
-        fmode = 'wb'
+        fmode = "wb"
         headers = {}
       end
 
-      yield :new_segment, file: target_name, from: from if block_given?
+      yield :new_segment, file: target_name, from: from if block
       File.open(tmpfile, mode: fmode, external_encoding: Encoding::BINARY) do |f|
         Excon.get download_url, headers: headers, response_block: ->(chunk, remaining_bytes, total_bytes) do
           f.write(chunk)
-          yield :progress, file: target_name, from: from, progress: total_bytes - remaining_bytes, total: total_bytes if block_given?
+          yield :progress, file: target_name, from: from, progress: total_bytes - remaining_bytes, total: total_bytes if block
         end
       end
-      yield :finish_segment, file: target_name if block_given?
+      yield :finish_segment, file: target_name if block
       FileUtils.mv(tmpfile, filename)
     end
 
